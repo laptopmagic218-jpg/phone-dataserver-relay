@@ -8,7 +8,7 @@ const server = http.createServer((req, res) => {
   res.end("Relay server is running");
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 100 * 1024 * 1024 });
 
 const clients = new Set();
 
@@ -36,7 +36,6 @@ wss.on("connection", (ws) => {
     }
     if (!msg || typeof msg !== "object") return;
 
-    // Role registration message
     if (msg.type === "REGISTER" || msg.action === "REGISTER") {
       ws.role = String(msg.role || "unknown").toLowerCase();
       ws.deviceId = String(msg.deviceId || "");
@@ -52,28 +51,36 @@ wss.on("connection", (ws) => {
     const viewers = getByRole("viewer");
 
     // 1. Phone -> data-server ingestion & acknowledgements
-    if (msgType === "INGEST_CHUNK" || action === "INGEST_CHUNK") {
+    if (
+      msgType === "INGEST_CHUNK" || action === "INGEST_CHUNK" ||
+      msgType === "FILE_CHUNK" || action === "FILE_CHUNK" ||
+      msgType === "LIVE_AUDIO_CHUNK" || action === "LIVE_AUDIO_CHUNK"
+    ) {
       for (const ds of dataServers) sendJson(ds, msg);
       return;
     }
 
-    if (msgType === "INGEST_ACK") {
+    if (
+      msgType === "INGEST_ACK" ||
+      msgType === "FILE_CHUNK_ACK" ||
+      msgType === "LIVE_AUDIO_ACK"
+    ) {
       for (const ph of phones) sendJson(ph, msg);
       return;
     }
 
-    // 2. Viewer (index.html) -> data-server batch/stored queries
+    // 2. Viewer -> data-server queries
     if (
       action === "GET_BATCH_SUMMARY" ||
       action === "GET_BATCH_ITEMS" ||
-      action === "GET_STORED_FILE"
+      action === "GET_STORED_FILE" ||
+      action === "GET_LIVE_AUDIO"
     ) {
       if (dataServers.length > 0) {
         for (const ds of dataServers) {
           sendJson(ds, { ...msg, _replyToViewer: true });
         }
       } else {
-        // Fallback to live phone if data-server isn't connected
         for (const ph of phones) sendJson(ph, msg);
       }
       return;
@@ -83,14 +90,16 @@ wss.on("connection", (ws) => {
     if (
       msgType === "BATCH_SUMMARY" ||
       msgType === "BATCH_ITEMS" ||
-      msgType === "STORED_FILE"
+      msgType === "STORED_FILE" ||
+      msgType === "STORED_FILE_MISSING" ||
+      msgType === "LIVE_AUDIO_ITEMS"
     ) {
       for (const vw of viewers) sendJson(vw, msg);
       return;
     }
 
     // 4. Live Viewer -> Phone commands
-    if (msgType === "COMMAND" || action.startsWith("GET_")) {
+    if (msgType === "COMMAND" || action.startsWith("GET_") || action.startsWith("SYNC_")) {
       for (const ph of phones) sendJson(ph, msg);
       return;
     }
